@@ -1302,15 +1302,15 @@ class TestLocalSessionCLI:
         # Mock Path.home() to return our tmp_path
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        # Mock questionary.select to return the session file
-        class MockSelect:
+        # Mock TerminalMenu to return index 0 (first session)
+        class MockTerminalMenu:
             def __init__(self, *args, **kwargs):
                 pass
 
-            def ask(self):
-                return session_file
+            def show(self):
+                return 0
 
-        monkeypatch.setattr(questionary, "select", MockSelect)
+        monkeypatch.setattr("claude_code_transcripts.TerminalMenu", MockTerminalMenu)
 
         runner = CliRunner()
         result = runner.invoke(cli, ["local"])
@@ -1323,7 +1323,6 @@ class TestLocalSessionCLI:
         """Test that running with no arguments runs local command."""
         from click.testing import CliRunner
         from claude_code_transcripts import cli
-        import questionary
 
         # Create mock .claude/projects structure
         projects_dir = tmp_path / ".claude" / "projects" / "test-project"
@@ -1338,15 +1337,15 @@ class TestLocalSessionCLI:
         # Mock Path.home() to return our tmp_path
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        # Mock questionary.select to return the session file
-        class MockSelect:
+        # Mock TerminalMenu to return index 0 (first session)
+        class MockTerminalMenu:
             def __init__(self, *args, **kwargs):
                 pass
 
-            def ask(self):
-                return session_file
+            def show(self):
+                return 0
 
-        monkeypatch.setattr(questionary, "select", MockSelect)
+        monkeypatch.setattr("claude_code_transcripts.TerminalMenu", MockTerminalMenu)
 
         runner = CliRunner()
         result = runner.invoke(cli, [])
@@ -1358,7 +1357,6 @@ class TestLocalSessionCLI:
         """Test that local command handles cancelled selection gracefully."""
         from click.testing import CliRunner
         from claude_code_transcripts import cli
-        import questionary
 
         # Create mock .claude/projects structure
         projects_dir = tmp_path / ".claude" / "projects" / "test-project"
@@ -1373,15 +1371,15 @@ class TestLocalSessionCLI:
         # Mock Path.home() to return our tmp_path
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        # Mock questionary.select to return None (cancelled)
-        class MockSelect:
+        # Mock TerminalMenu to return None (cancelled)
+        class MockTerminalMenu:
             def __init__(self, *args, **kwargs):
                 pass
 
-            def ask(self):
+            def show(self):
                 return None
 
-        monkeypatch.setattr(questionary, "select", MockSelect)
+        monkeypatch.setattr("claude_code_transcripts.TerminalMenu", MockTerminalMenu)
 
         runner = CliRunner()
         result = runner.invoke(cli, ["local"])
@@ -1464,7 +1462,6 @@ class TestOutputAutoOption:
         """Test that local -a creates output subdirectory named after file stem."""
         from click.testing import CliRunner
         from claude_code_transcripts import cli
-        import questionary
 
         # Create mock .claude/projects structure
         projects_dir = tmp_path / ".claude" / "projects" / "test-project"
@@ -1482,15 +1479,15 @@ class TestOutputAutoOption:
         # Mock Path.home() to return our tmp_path
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        # Mock questionary.select to return the session file
-        class MockSelect:
+        # Mock TerminalMenu to return index 0 (first session)
+        class MockTerminalMenu:
             def __init__(self, *args, **kwargs):
                 pass
 
-            def ask(self):
-                return session_file
+            def show(self):
+                return 0
 
-        monkeypatch.setattr(questionary, "select", MockSelect)
+        monkeypatch.setattr("claude_code_transcripts.TerminalMenu", MockTerminalMenu)
 
         runner = CliRunner()
         result = runner.invoke(cli, ["local", "-a", "-o", str(output_parent)])

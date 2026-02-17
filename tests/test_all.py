@@ -698,3 +698,134 @@ class TestWebCommandRepoFiltering:
         # Should show (no repo) placeholder
         assert "(no repo)" in display
         assert "Fix the bug" in display
+
+
+class TestFuzzyFiltering:
+    """Tests for fuzzy filtering in local command."""
+
+    @pytest.fixture
+    def sessions_for_filter(self):
+        """Create mock sessions with distinct content for filtering tests."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            projects_dir = Path(tmpdir)
+
+            project = projects_dir / "-home-user-projects-test"
+            project.mkdir(parents=True)
+
+            # Session about Python
+            session_python = project / "python_session.jsonl"
+            session_python.write_text(
+                '{"type": "user", "timestamp": "2025-01-01T10:00:00.000Z", "message": {"role": "user", "content": "Help me with Python programming"}}\n'
+                '{"type": "assistant", "timestamp": "2025-01-01T10:00:05.000Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "I can help with Python! Let me show you some examples."}]}}\n'
+            )
+
+            # Session about JavaScript
+            session_js = project / "js_session.jsonl"
+            session_js.write_text(
+                '{"type": "user", "timestamp": "2025-01-02T10:00:00.000Z", "message": {"role": "user", "content": "How do I use JavaScript async/await?"}}\n'
+                '{"type": "assistant", "timestamp": "2025-01-02T10:00:05.000Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "Async/await in JavaScript makes promises easier to work with."}]}}\n'
+            )
+
+            # Session about database
+            session_db = project / "db_session.jsonl"
+            session_db.write_text(
+                '{"type": "user", "timestamp": "2025-01-03T10:00:00.000Z", "message": {"role": "user", "content": "Fix the login bug"}}\n'
+                '{"type": "assistant", "timestamp": "2025-01-03T10:00:05.000Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "I found the issue in the PostgreSQL database query."}]}}\n'
+            )
+
+            yield projects_dir
+
+    def test_extract_session_text(self, sessions_for_filter):
+        """Test extracting all text from a session file."""
+        from claude_code_transcripts import extract_session_text
+
+        session_path = (
+            sessions_for_filter / "-home-user-projects-test" / "python_session.jsonl"
+        )
+        text = extract_session_text(session_path)
+
+        assert "Python programming" in text
+        assert "help with Python" in text
+
+    def test_extract_session_text_handles_content_blocks(self, sessions_for_filter):
+        """Test that extract_session_text handles content block arrays."""
+        from claude_code_transcripts import extract_session_text
+
+        session_path = (
+            sessions_for_filter / "-home-user-projects-test" / "db_session.jsonl"
+        )
+        text = extract_session_text(session_path)
+
+        # Should extract text from assistant content blocks
+        assert "PostgreSQL" in text
+
+    def test_fuzzy_match_session(self, sessions_for_filter):
+        """Test fuzzy matching against session content."""
+        from claude_code_transcripts import fuzzy_match_session
+
+        session_path = (
+            sessions_for_filter / "-home-user-projects-test" / "python_session.jsonl"
+        )
+
+        # Exact match
+        assert fuzzy_match_session(session_path, "Python")
+        # Typo should still match with fuzzy
+        assert fuzzy_match_session(session_path, "Pyhton")
+        # Unrelated term should not match
+        assert not fuzzy_match_session(session_path, "kubernetes")
+
+    def test_filter_sessions_fuzzy(self, sessions_for_filter):
+        """Test filtering sessions with fuzzy matching."""
+        from claude_code_transcripts import filter_sessions_fuzzy, find_local_sessions
+
+        sessions = find_local_sessions(sessions_for_filter, limit=100)
+
+        # Filter for JavaScript
+        js_sessions = filter_sessions_fuzzy(sessions, "javascript")
+        assert len(js_sessions) == 1
+        assert "js_session" in str(js_sessions[0][0])
+
+        # Filter for PostgreSQL (in body, not summary)
+        db_sessions = filter_sessions_fuzzy(sessions, "postgresql")
+        assert len(db_sessions) == 1
+        assert "db_session" in str(db_sessions[0][0])
+
+    def test_filter_sessions_fuzzy_matches_summary_and_body(self, sessions_for_filter):
+        """Test that fuzzy filter matches both summary and body content."""
+        from claude_code_transcripts import filter_sessions_fuzzy, find_local_sessions
+
+        sessions = find_local_sessions(sessions_for_filter, limit=100)
+
+        # "login" is in the summary (first user message)
+        login_sessions = filter_sessions_fuzzy(sessions, "login")
+        assert len(login_sessions) == 1
+
+        # "PostgreSQL" is only in the assistant response (body)
+        postgres_sessions = filter_sessions_fuzzy(sessions, "postgres")
+        assert len(postgres_sessions) == 1
+
+    def test_filter_sessions_fuzzy_with_typo(self, sessions_for_filter):
+        """Test that fuzzy matching handles typos."""
+        from claude_code_transcripts import filter_sessions_fuzzy, find_local_sessions
+
+        sessions = find_local_sessions(sessions_for_filter, limit=100)
+
+        # Typo: "javascrpit" should still match "javascript"
+        js_sessions = filter_sessions_fuzzy(sessions, "javascrpit")
+        assert len(js_sessions) >= 1
+
+    def test_exclude_sessions(self, sessions_for_filter):
+        """Test excluding sessions using fuzzy_match_session."""
+        from claude_code_transcripts import fuzzy_match_session, find_local_sessions
+
+        sessions = find_local_sessions(sessions_for_filter, limit=100)
+        assert len(sessions) == 3
+
+        # Exclude Python sessions
+        filtered = [
+            (fp, summary)
+            for fp, summary in sessions
+            if not fuzzy_match_session(fp, "python")
+        ]
+        assert len(filtered) == 2
+        assert all("python" not in str(fp).lower() for fp, _ in filtered)

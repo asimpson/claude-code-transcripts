@@ -18,6 +18,8 @@ import httpx
 from jinja2 import Environment, PackageLoader
 import markdown
 import questionary
+from rapidfuzz import fuzz
+from simple_term_menu import TerminalMenu
 
 # Set up Jinja2 environment
 _jinja_env = Environment(
@@ -73,6 +75,104 @@ def extract_text_from_content(content):
                     texts.append(text)
         return " ".join(texts).strip()
     return ""
+
+
+def extract_session_text(filepath):
+    """Extract all text content from a session file.
+
+    Reads the session file and extracts text from all user and assistant messages.
+    This is used for fuzzy filtering against the full session content.
+
+    Args:
+        filepath: Path to the session JSONL file.
+
+    Returns:
+        A string containing all text content from the session.
+    """
+    filepath = Path(filepath)
+    texts = []
+
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    entry_type = obj.get("type")
+                    if entry_type not in ("user", "assistant"):
+                        continue
+
+                    message = obj.get("message", {})
+                    content = message.get("content", "")
+                    text = extract_text_from_content(content)
+                    if text:
+                        texts.append(text)
+                except json.JSONDecodeError:
+                    continue
+    except (OSError, IOError):
+        pass
+
+    return " ".join(texts)
+
+
+def fuzzy_match_session(filepath, query, threshold=75):
+    """Check if a session matches a query using fuzzy matching.
+
+    First checks for exact substring match (case-insensitive), then falls back
+    to fuzzy matching for typo tolerance.
+
+    Args:
+        filepath: Path to the session JSONL file.
+        query: The search query string.
+        threshold: Minimum fuzzy match score (0-100). Default 75.
+
+    Returns:
+        True if the session matches the query, False otherwise.
+    """
+    text = extract_session_text(filepath)
+    if not text:
+        return False
+
+    query_lower = query.lower()
+    text_lower = text.lower()
+
+    # First try exact substring match (case-insensitive)
+    if query_lower in text_lower:
+        return True
+
+    # Fall back to fuzzy matching for typos
+    # Split text into words and check each word against the query
+    words = text_lower.split()
+    for word in words:
+        # Check if the query is similar to any word in the text
+        score = fuzz.ratio(query_lower, word)
+        if score >= threshold:
+            return True
+
+    return False
+
+
+def filter_sessions_fuzzy(sessions, query, threshold=75):
+    """Filter sessions using fuzzy matching against content.
+
+    Args:
+        sessions: List of (filepath, summary) tuples from find_local_sessions.
+        query: The search query string.
+        threshold: Minimum fuzzy match score (0-100). Default 75.
+
+    Returns:
+        Filtered list of (filepath, summary) tuples that match the query.
+    """
+    if not query:
+        return sessions
+
+    return [
+        (filepath, summary)
+        for filepath, summary in sessions
+        if fuzzy_match_session(filepath, query, threshold)
+    ]
 
 
 def extract_session_title(text, max_length=50):
@@ -1558,11 +1658,22 @@ def cli():
 )
 @click.option(
     "--limit",
-    default=10,
-    help="Maximum number of sessions to show (default: 10)",
+    default=50,
+    help="Maximum number of sessions to load (default: 50)",
 )
-def local_cmd(output, output_auto, repo, gist, include_json, open_browser, limit):
-    """Select and convert a local Claude Code session to HTML."""
+@click.option(
+    "-x",
+    "--exclude",
+    multiple=True,
+    help="Exclude sessions matching this term (can be used multiple times).",
+)
+def local_cmd(
+    output, output_auto, repo, gist, include_json, open_browser, limit, exclude
+):
+    """Select and convert a local Claude Code session to HTML.
+
+    Type to fuzzy-filter the session list. Use --exclude to pre-filter sessions.
+    """
     projects_folder = Path.home() / ".claude" / "projects"
 
     if not projects_folder.exists():
@@ -1577,29 +1688,68 @@ def local_cmd(output, output_auto, repo, gist, include_json, open_browser, limit
         click.echo("No local sessions found.")
         return
 
-    # Build choices for questionary
-    choices = []
+    # Apply exclusion filters
+    if exclude:
+        for term in exclude:
+            results = [
+                (fp, summary)
+                for fp, summary in results
+                if not fuzzy_match_session(fp, term)
+            ]
+        if not results:
+            click.echo("No sessions remaining after exclusion filters.")
+            return
+
+    # Build menu entries with searchable content
+    menu_entries = []
+    filepaths = []
     for filepath, summary in results:
         stat = filepath.stat()
         mod_time = datetime.fromtimestamp(stat.st_mtime)
         size_kb = stat.st_size / 1024
         date_str = mod_time.strftime("%Y-%m-%d %H:%M")
+
+        # Get body text for searching (truncated for display)
+        body_text = extract_session_text(filepath)
+        # Extract key terms from body (first 100 chars not in summary)
+        body_preview = ""
+        if body_text:
+            # Remove the summary part from body to avoid duplication
+            body_rest = body_text.replace(summary, "").strip()
+            if body_rest:
+                body_preview = body_rest[:80].replace("\n", " ")
+                if len(body_rest) > 80:
+                    body_preview += "..."
+
         # Truncate summary if too long
-        if len(summary) > 50:
-            summary = summary[:47] + "..."
-        display = f"{date_str}  {size_kb:5.0f} KB  {summary}"
-        choices.append(questionary.Choice(title=display, value=filepath))
+        display_summary = summary[:47] + "..." if len(summary) > 50 else summary
 
-    selected = questionary.select(
-        "Select a session to convert:",
-        choices=choices,
-    ).ask()
+        # Format: date | size | summary | body preview (for searching)
+        if body_preview:
+            display = (
+                f"{date_str}  {size_kb:5.0f} KB  {display_summary}  [{body_preview}]"
+            )
+        else:
+            display = f"{date_str}  {size_kb:5.0f} KB  {display_summary}"
 
-    if selected is None:
+        menu_entries.append(display)
+        filepaths.append(filepath)
+
+    # Use TerminalMenu with search enabled
+    terminal_menu = TerminalMenu(
+        menu_entries,
+        title="Select a session (type to filter):",
+        search_key=None,  # Always in search mode
+        show_search_hint=True,
+    )
+
+    selected_index = terminal_menu.show()
+
+    if selected_index is None:
         click.echo("No session selected.")
         return
 
-    session_file = selected
+    session_file = filepaths[selected_index]
 
     # Determine output directory and whether to open browser
     # If no -o specified, use temp dir and open browser by default
