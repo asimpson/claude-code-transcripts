@@ -1638,3 +1638,90 @@ class TestSearchFeature:
 
         # Total pages should be embedded for JS to know how many pages to fetch
         assert "totalPages" in index_html or "total_pages" in index_html
+
+
+class TestSessionTitle:
+    """Tests for session title extraction and display."""
+
+    def test_extract_session_title_from_first_message(self):
+        """Test extracting a short title from the first user message."""
+        from claude_code_transcripts import extract_session_title
+
+        # Short messages should be used as-is (truncated if needed)
+        assert extract_session_title("Fix the login bug") == "Fix the login bug"
+
+        # Long messages should be truncated
+        long_msg = "This is a very long user prompt that goes on and on about what needs to be done and should be truncated to something reasonable"
+        title = extract_session_title(long_msg)
+        assert len(title) <= 50
+        assert title.endswith("...")
+
+    def test_title_in_html_output(self, output_dir):
+        """Test that the title appears in HTML output instead of 'Claude Code transcript'."""
+        session_data = {
+            "loglines": [
+                {
+                    "type": "user",
+                    "timestamp": "2025-01-01T10:00:00.000Z",
+                    "message": {
+                        "content": "Build a REST API endpoint",
+                        "role": "user",
+                    },
+                },
+                {
+                    "type": "assistant",
+                    "timestamp": "2025-01-01T10:00:05.000Z",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "I'll build that."}],
+                    },
+                },
+            ]
+        }
+
+        session_file = output_dir / "test_session.json"
+        session_file.write_text(json.dumps(session_data), encoding="utf-8")
+
+        generate_html(session_file, output_dir)
+
+        index_html = (output_dir / "index.html").read_text(encoding="utf-8")
+        page_html = (output_dir / "page-001.html").read_text(encoding="utf-8")
+
+        # Title should contain the topic, not generic "Claude Code transcript"
+        assert "Build a REST API endpoint" in index_html
+        assert "<title>" in index_html
+        # The h1 should also have the topic
+        assert "Build a REST API endpoint" in page_html
+
+    def test_web_session_uses_existing_title(self, output_dir):
+        """Test that web sessions use the title from session data."""
+        from claude_code_transcripts import generate_html_from_session_data
+
+        session_data = {
+            "title": "Implement user authentication",
+            "loglines": [
+                {
+                    "type": "user",
+                    "timestamp": "2025-01-01T10:00:00.000Z",
+                    "message": {
+                        "content": "Let's add login functionality",
+                        "role": "user",
+                    },
+                },
+                {
+                    "type": "assistant",
+                    "timestamp": "2025-01-01T10:00:05.000Z",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "I'll implement that."}],
+                    },
+                },
+            ],
+        }
+
+        generate_html_from_session_data(session_data, output_dir)
+
+        index_html = (output_dir / "index.html").read_text(encoding="utf-8")
+
+        # Should use the explicit title, not the first message
+        assert "Implement user authentication" in index_html

@@ -75,6 +75,40 @@ def extract_text_from_content(content):
     return ""
 
 
+def extract_session_title(text, max_length=50):
+    """Extract a short session title from text.
+
+    Takes the first line or sentence and truncates if needed.
+
+    Args:
+        text: The text to extract a title from (usually first user message)
+        max_length: Maximum length for the title (default 50)
+
+    Returns:
+        A short title string, truncated with "..." if needed.
+    """
+    if not text:
+        return "Untitled"
+
+    # Take first line only
+    first_line = text.split("\n")[0].strip()
+
+    # If first line is short enough, use it
+    if len(first_line) <= max_length:
+        return first_line
+
+    # Reserve space for "..."
+    truncate_at = max_length - 3
+
+    # Truncate at word boundary if possible
+    truncated = first_line[:truncate_at]
+    last_space = truncated.rfind(" ")
+    if last_space > truncate_at // 2:
+        truncated = truncated[:last_space]
+
+    return truncated.rstrip(".,;:") + "..."
+
+
 # Module-level variable for GitHub repo (set by generate_html)
 _github_repo = None
 
@@ -1351,6 +1385,15 @@ def generate_html(json_path, output_dir, github_repo=None):
     if current_conv:
         conversations.append(current_conv)
 
+    # Extract session title from first non-continuation user message
+    session_title = None
+    for conv in conversations:
+        if not conv.get("is_continuation") and conv.get("user_text"):
+            session_title = extract_session_title(conv["user_text"])
+            break
+    if not session_title:
+        session_title = "Claude Code transcript"
+
     total_convs = len(conversations)
     total_pages = (total_convs + PROMPTS_PER_PAGE - 1) // PROMPTS_PER_PAGE
 
@@ -1374,6 +1417,7 @@ def generate_html(json_path, output_dir, github_repo=None):
         page_content = page_template.render(
             css=CSS,
             js=JS,
+            session_title=session_title,
             page_num=page_num,
             total_pages=total_pages,
             pagination_html=pagination_html,
@@ -1455,6 +1499,7 @@ def generate_html(json_path, output_dir, github_repo=None):
     index_content = index_template.render(
         css=CSS,
         js=JS,
+        session_title=session_title,
         pagination_html=index_pagination,
         prompt_num=prompt_num,
         total_messages=total_messages,
@@ -1825,6 +1870,16 @@ def generate_html_from_session_data(session_data, output_dir, github_repo=None):
     if current_conv:
         conversations.append(current_conv)
 
+    # Use explicit title from session data (web sessions) or extract from first message
+    session_title = session_data.get("title")
+    if not session_title:
+        for conv in conversations:
+            if not conv.get("is_continuation") and conv.get("user_text"):
+                session_title = extract_session_title(conv["user_text"])
+                break
+    if not session_title:
+        session_title = "Claude Code transcript"
+
     total_convs = len(conversations)
     total_pages = (total_convs + PROMPTS_PER_PAGE - 1) // PROMPTS_PER_PAGE
 
@@ -1848,6 +1903,7 @@ def generate_html_from_session_data(session_data, output_dir, github_repo=None):
         page_content = page_template.render(
             css=CSS,
             js=JS,
+            session_title=session_title,
             page_num=page_num,
             total_pages=total_pages,
             pagination_html=pagination_html,
@@ -1929,6 +1985,7 @@ def generate_html_from_session_data(session_data, output_dir, github_repo=None):
     index_content = index_template.render(
         css=CSS,
         js=JS,
+        session_title=session_title,
         pagination_html=index_pagination,
         prompt_num=prompt_num,
         total_messages=total_messages,
