@@ -11,6 +11,7 @@ from claude_code_transcripts import (
     find_all_sessions,
     get_project_display_name,
     generate_batch_html,
+    group_sessions_by_day,
 )
 
 
@@ -229,6 +230,46 @@ class TestGenerateBatchHtml:
         # Should contain links to session directories
         assert "abc123" in project_a_index
         assert "def456" in project_a_index
+
+    def test_creates_daily_index(self, mock_projects_dir, output_dir):
+        """Test that daily.html is created alongside index.html."""
+        generate_batch_html(mock_projects_dir, output_dir)
+        assert (output_dir / "daily.html").exists()
+
+    def test_daily_index_groups_by_date(self, mock_projects_dir, output_dir):
+        """Test that daily.html groups sessions by date."""
+        generate_batch_html(mock_projects_dir, output_dir)
+
+        daily_html = (output_dir / "daily.html").read_text()
+        # Should contain session summaries from both projects
+        assert "Hello from project A" in daily_html
+        assert "Hello from project B" in daily_html
+
+    def test_daily_index_shows_project_names(self, mock_projects_dir, output_dir):
+        """Test that daily.html shows which project each session belongs to."""
+        generate_batch_html(mock_projects_dir, output_dir)
+
+        daily_html = (output_dir / "daily.html").read_text()
+        assert "project-a" in daily_html
+        assert "project-b" in daily_html
+
+    def test_daily_index_links_to_session_transcripts(
+        self, mock_projects_dir, output_dir
+    ):
+        """Test that daily.html links to session transcript directories."""
+        generate_batch_html(mock_projects_dir, output_dir)
+
+        daily_html = (output_dir / "daily.html").read_text()
+        # Should have links to session directories
+        assert "abc123" in daily_html
+        assert "ghi789" in daily_html
+
+    def test_master_index_links_to_daily(self, mock_projects_dir, output_dir):
+        """Test that master index.html links to daily.html."""
+        generate_batch_html(mock_projects_dir, output_dir)
+
+        index_html = (output_dir / "index.html").read_text()
+        assert "daily.html" in index_html
 
     def test_returns_statistics(self, mock_projects_dir, output_dir):
         """Test that batch generation returns statistics."""
@@ -829,3 +870,138 @@ class TestFuzzyFiltering:
         ]
         assert len(filtered) == 2
         assert all("python" not in str(fp).lower() for fp, _ in filtered)
+
+
+class TestGroupSessionsByDay:
+    """Tests for group_sessions_by_day function."""
+
+    def test_groups_sessions_from_multiple_projects_by_day(self):
+        """Test that sessions across projects are grouped by calendar day."""
+        projects = [
+            {
+                "name": "project-a",
+                "path": Path("/fake/project-a"),
+                "sessions": [
+                    {
+                        "path": Path("/fake/project-a/sess1.jsonl"),
+                        "summary": "Morning session",
+                        "mtime": 1704103200.0,  # 2024-01-01 10:00 UTC
+                        "size": 1024,
+                    },
+                    {
+                        "path": Path("/fake/project-a/sess2.jsonl"),
+                        "summary": "Afternoon session",
+                        "mtime": 1704121200.0,  # 2024-01-01 15:00 UTC
+                        "size": 2048,
+                    },
+                ],
+            },
+            {
+                "name": "project-b",
+                "path": Path("/fake/project-b"),
+                "sessions": [
+                    {
+                        "path": Path("/fake/project-b/sess3.jsonl"),
+                        "summary": "Next day session",
+                        "mtime": 1704189600.0,  # 2024-01-02 10:00 UTC
+                        "size": 512,
+                    },
+                ],
+            },
+        ]
+
+        days = group_sessions_by_day(projects)
+
+        # Should have 2 days
+        assert len(days) == 2
+
+        # Days should be ordered most recent first
+        assert days[0]["date"] == "2024-01-02"
+        assert days[1]["date"] == "2024-01-01"
+
+    def test_sessions_within_day_ordered_by_time(self):
+        """Test that sessions within a day are ordered by time (most recent first)."""
+        projects = [
+            {
+                "name": "project-a",
+                "path": Path("/fake/project-a"),
+                "sessions": [
+                    {
+                        "path": Path("/fake/project-a/sess1.jsonl"),
+                        "summary": "Early morning",
+                        "mtime": 1704088800.0,  # 2024-01-01 06:00 UTC
+                        "size": 1024,
+                    },
+                ],
+            },
+            {
+                "name": "project-b",
+                "path": Path("/fake/project-b"),
+                "sessions": [
+                    {
+                        "path": Path("/fake/project-b/sess2.jsonl"),
+                        "summary": "Late night",
+                        "mtime": 1704146400.0,  # 2024-01-01 22:00 UTC
+                        "size": 2048,
+                    },
+                ],
+            },
+        ]
+
+        days = group_sessions_by_day(projects)
+
+        assert len(days) == 1
+        sessions = days[0]["sessions"]
+        assert len(sessions) == 2
+        # Most recent first
+        assert sessions[0]["summary"] == "Late night"
+        assert sessions[1]["summary"] == "Early morning"
+
+    def test_sessions_include_project_name(self):
+        """Test that each session in the daily view includes its project name."""
+        projects = [
+            {
+                "name": "my-app",
+                "path": Path("/fake/my-app"),
+                "sessions": [
+                    {
+                        "path": Path("/fake/my-app/sess1.jsonl"),
+                        "summary": "Fix bug",
+                        "mtime": 1704103200.0,  # 2024-01-01 10:00 UTC
+                        "size": 1024,
+                    },
+                ],
+            },
+        ]
+
+        days = group_sessions_by_day(projects)
+
+        assert days[0]["sessions"][0]["project_name"] == "my-app"
+
+    def test_empty_projects_returns_empty(self):
+        """Test that empty projects list returns empty days."""
+        assert group_sessions_by_day([]) == []
+
+    def test_day_includes_display_date(self):
+        """Test that each day group includes a human-readable display date."""
+        projects = [
+            {
+                "name": "project-a",
+                "path": Path("/fake/project-a"),
+                "sessions": [
+                    {
+                        "path": Path("/fake/project-a/sess1.jsonl"),
+                        "summary": "Test",
+                        "mtime": 1704103200.0,  # 2024-01-01 10:00 UTC
+                        "size": 1024,
+                    },
+                ],
+            },
+        ]
+
+        days = group_sessions_by_day(projects)
+
+        assert "date" in days[0]
+        assert "display_date" in days[0]
+        # display_date should be human-readable like "Monday, January 1"
+        assert "January" in days[0]["display_date"] or "Jan" in days[0]["display_date"]

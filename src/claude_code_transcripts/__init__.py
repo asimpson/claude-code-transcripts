@@ -437,6 +437,58 @@ def find_all_sessions(folder, include_agents=False):
     return result
 
 
+def group_sessions_by_day(projects):
+    """Group all sessions across projects by calendar day.
+
+    Takes the project-grouped output from find_all_sessions() and reorganizes
+    it into a flat list of day groups, each containing sessions from any project.
+
+    Args:
+        projects: List of project dicts from find_all_sessions().
+
+    Returns:
+        A list of day dicts ordered most recent first, each containing:
+        - date: ISO date string (e.g. "2024-01-15")
+        - display_date: Human-readable date (e.g. "Monday, January 15")
+        - sessions: list of session dicts with project_name, path, summary, mtime, size
+    """
+    if not projects:
+        return []
+
+    # Collect all sessions with their project name
+    all_sessions = []
+    for project in projects:
+        for session in project["sessions"]:
+            all_sessions.append(
+                {
+                    **session,
+                    "project_name": project["name"],
+                }
+            )
+
+    # Group by date
+    days = {}
+    for session in all_sessions:
+        dt = datetime.fromtimestamp(session["mtime"])
+        date_key = dt.strftime("%Y-%m-%d")
+        if date_key not in days:
+            display_date = dt.strftime("%A, %B %-d")
+            days[date_key] = {
+                "date": date_key,
+                "display_date": display_date,
+                "sessions": [],
+            }
+        days[date_key]["sessions"].append(session)
+
+    # Sort sessions within each day by mtime (most recent first)
+    for day in days.values():
+        day["sessions"].sort(key=lambda s: s["mtime"], reverse=True)
+
+    # Sort days most recent first
+    result = sorted(days.values(), key=lambda d: d["date"], reverse=True)
+    return result
+
+
 def generate_batch_html(
     source_folder, output_dir, include_agents=False, progress_callback=None
 ):
@@ -503,8 +555,9 @@ def generate_batch_html(
         # Generate project index
         _generate_project_index(project, project_dir)
 
-    # Generate master index
+    # Generate master index and daily index
     _generate_master_index(projects, output_dir)
+    _generate_daily_index(projects, output_dir)
 
     return {
         "total_projects": len(projects),
@@ -579,6 +632,34 @@ def _generate_master_index(projects, output_dir):
     )
 
     output_path = output_dir / "index.html"
+    output_path.write_text(html_content, encoding="utf-8")
+
+
+def _generate_daily_index(projects, output_dir):
+    """Generate daily.html showing all sessions grouped by day."""
+    template = get_template("daily_index.html")
+
+    days = group_sessions_by_day(projects)
+
+    total_sessions = sum(len(d["sessions"]) for d in days)
+
+    # Format session data for template
+    for day in days:
+        for session in day["sessions"]:
+            mod_time = datetime.fromtimestamp(session["mtime"])
+            session["time"] = mod_time.strftime("%H:%M")
+            session["name"] = session["path"].stem
+            session["size_kb"] = session["size"] / 1024
+
+    html_content = template.render(
+        days=days,
+        total_sessions=total_sessions,
+        total_days=len(days),
+        css=CSS,
+        js=JS,
+    )
+
+    output_path = output_dir / "daily.html"
     output_path.write_text(html_content, encoding="utf-8")
 
 

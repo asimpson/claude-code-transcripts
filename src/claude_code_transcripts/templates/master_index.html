@@ -4,7 +4,7 @@
 
 {% block content %}
         <h1>Claude Code Archive</h1>
-        <p style="color: var(--text-muted); margin-bottom: 24px;">{{ total_projects }} projects · {{ total_sessions }} sessions</p>
+        <p style="color: var(--text-muted); margin-bottom: 24px;">{{ total_projects }} projects · {{ total_sessions }} sessions · <a href="daily.html" style="color: var(--user-border);">view by day</a></p>
 
         {% for project in projects %}
         <div class="index-item">
