@@ -175,6 +175,38 @@ class TestPublishToGithub:
         assert "testuser" in url
         assert "2025-01-15" in url
 
+    def test_returns_custom_pages_domain_url(self, tmp_path, monkeypatch):
+        """Test custom GitHub Pages domain is used in the returned URL."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        (output_dir / "index.html").write_text("<html><body>Index</body></html>")
+
+        def mock_run(cmd, *args, **kwargs):
+            if cmd[0] == "gh" and cmd[1] == "api" and cmd[2] == "user":
+                return subprocess.CompletedProcess(
+                    args=cmd, returncode=0, stdout="testuser\n", stderr=""
+                )
+            if cmd[0] == "gh" and cmd[1] == "api":
+                return subprocess.CompletedProcess(
+                    args=cmd, returncode=0, stdout='{"sha": "abc123"}', stderr=""
+                )
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0, stdout="", stderr=""
+            )
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        url = publish_to_github(
+            output_dir=output_dir,
+            repo="myorg/transcripts",
+            branch="gh-pages",
+            session_title="Fix auth bug",
+            session_timestamp="2025-01-15T10:30:00.000Z",
+            pages_domain="foo.pages.github.io",
+        )
+
+        assert url == "https://foo.pages.github.io/testuser/2025-01-15-fix-auth-bug/"
+
     def test_raises_on_repo_not_found(self, tmp_path, monkeypatch):
         """Test error when repository is not found."""
         output_dir = tmp_path / "output"
@@ -307,6 +339,7 @@ class TestPublishToGithubCLI:
         assert "--publish-to-github" in result.output
         assert "--publish-to-github-repo" in result.output
         assert "--publish-to-github-branch" in result.output
+        assert "--publish-to-github-domain" in result.output
 
     def test_local_command_has_publish_options(self):
         """Test that local command has publish-to-github options."""
@@ -317,6 +350,7 @@ class TestPublishToGithubCLI:
         assert "--publish-to-github" in result.output
         assert "--publish-to-github-repo" in result.output
         assert "--publish-to-github-branch" in result.output
+        assert "--publish-to-github-domain" in result.output
 
     def test_web_command_has_publish_options(self):
         """Test that web command has publish-to-github options."""
@@ -327,6 +361,7 @@ class TestPublishToGithubCLI:
         assert "--publish-to-github" in result.output
         assert "--publish-to-github-repo" in result.output
         assert "--publish-to-github-branch" in result.output
+        assert "--publish-to-github-domain" in result.output
 
     def test_all_command_does_not_have_publish_options(self):
         """Test that all command does NOT have publish-to-github options."""
@@ -513,3 +548,39 @@ class TestPublishToGithubCLI:
         # Check that custom branch was used in the JSON payloads
         assert len(json_payloads) > 0
         assert all(p.get("branch") == "html" for p in json_payloads)
+
+    def test_publish_with_custom_domain_echoes_full_url(self, tmp_path, monkeypatch):
+        """Test publishing echoes the full custom GitHub Pages URL."""
+        fixture_path = Path(__file__).parent / "sample_session.json"
+        publish_calls = []
+
+        def mock_publish_to_github(**kwargs):
+            publish_calls.append(kwargs)
+            return "https://foo.pages.github.io/testuser/2025-01-15-fix-auth-bug/"
+
+        monkeypatch.setattr(
+            "claude_code_transcripts.publish_to_github", mock_publish_to_github
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "json",
+                str(fixture_path),
+                "-o",
+                str(tmp_path / "output"),
+                "--publish-to-github",
+                "--publish-to-github-repo",
+                "myorg/transcripts",
+                "--publish-to-github-domain",
+                "foo.pages.github.io",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert publish_calls[0]["pages_domain"] == "foo.pages.github.io"
+        assert (
+            "Published: https://foo.pages.github.io/testuser/2025-01-15-fix-auth-bug/"
+            in result.output
+        )

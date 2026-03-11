@@ -142,6 +142,29 @@ claude-code-transcripts json session.json -o ./my-transcript --gist
 
 **Requirements:** The `--gist` option requires the [GitHub CLI](https://cli.github.com/) (`gh`) to be installed and authenticated (`gh auth login`).
 
+### Publishing to GitHub Pages
+
+Use `--publish-to-github` with a target repo to upload the generated HTML files to a GitHub Pages branch:
+
+```bash
+claude-code-transcripts json session.json \
+  -o ./my-transcript \
+  --publish-to-github \
+  --publish-to-github-repo myorg/transcripts
+```
+
+If your Pages site is served from a custom domain or alternate Pages hostname, pass
+`--publish-to-github-domain` to have the final output use that URL instead of the default
+`https://OWNER.github.io/REPO/...` form:
+
+```bash
+claude-code-transcripts json session.json \
+  -o ./my-transcript \
+  --publish-to-github \
+  --publish-to-github-repo myorg/transcripts \
+  --publish-to-github-domain foo.pages.github.io
+```
+
 ### Auto-naming output directories
 
 Use `-a/--output-auto` to automatically create a subdirectory named after the session:

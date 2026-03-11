@@ -1799,7 +1799,22 @@ def generate_session_slug(title, timestamp):
     return f"{date_part}-{slug_title}"
 
 
-def publish_to_github(output_dir, repo, branch, session_title, session_timestamp):
+def build_github_pages_url(owner, repo_name, base_path, pages_domain=None):
+    """Build the public URL for published GitHub Pages content."""
+    if pages_domain:
+        domain = re.sub(r"^https?://", "", pages_domain.strip()).rstrip("/")
+        return f"https://{domain}/{base_path}/"
+    return f"https://{owner}.github.io/{repo_name}/{base_path}/"
+
+
+def publish_to_github(
+    output_dir,
+    repo,
+    branch,
+    session_title,
+    session_timestamp,
+    pages_domain=None,
+):
     """Publish HTML files to a GitHub repository for GitHub Pages.
 
     Args:
@@ -1808,6 +1823,7 @@ def publish_to_github(output_dir, repo, branch, session_title, session_timestamp
         branch: Target branch (e.g., "gh-pages").
         session_title: Title of the session for the folder name.
         session_timestamp: Timestamp of the session for the folder name.
+        pages_domain: Optional GitHub Pages domain for the returned URL.
 
     Returns:
         The URL where the files will be accessible via GitHub Pages.
@@ -1918,12 +1934,7 @@ def publish_to_github(output_dir, repo, branch, session_title, session_timestamp
             # Clean up temp file
             Path(tmp_path).unlink(missing_ok=True)
 
-    # Generate the GitHub Pages URL
-    # Standard GitHub Pages: https://{owner}.github.io/{repo}/{path}/
-    # GHE Pages: varies by installation
-    pages_url = f"https://{owner}.github.io/{repo_name}/{base_path}/"
-
-    return pages_url
+    return build_github_pages_url(owner, repo_name, base_path, pages_domain)
 
 
 def generate_pagination_html(current_page, total_pages):
@@ -2182,6 +2193,11 @@ def cli():
     default="gh-pages",
     help="Target branch for GitHub Pages publishing (default: gh-pages).",
 )
+@click.option(
+    "--publish-to-github-domain",
+    "publish_github_domain",
+    help="GitHub Pages domain for the final published URL (for example foo.pages.github.io).",
+)
 def local_cmd(
     output,
     output_auto,
@@ -2194,6 +2210,7 @@ def local_cmd(
     publish_github,
     publish_github_repo,
     publish_github_branch,
+    publish_github_domain,
 ):
     """Select and convert a local Claude Code or Codex session to HTML."""
     provider = "codex" if codex else "claude"
@@ -2303,6 +2320,7 @@ def local_cmd(
                 branch=publish_github_branch,
                 session_title=session_summary,
                 session_timestamp=session_timestamp,
+                pages_domain=publish_github_domain,
             )
             click.echo(f"Published: {pages_url}")
 
@@ -2402,6 +2420,11 @@ def fetch_url_to_tempfile(url):
     default="gh-pages",
     help="Target branch for GitHub Pages publishing (default: gh-pages).",
 )
+@click.option(
+    "--publish-to-github-domain",
+    "publish_github_domain",
+    help="GitHub Pages domain for the final published URL (for example foo.pages.github.io).",
+)
 def json_cmd(
     json_file,
     output,
@@ -2413,6 +2436,7 @@ def json_cmd(
     publish_github,
     publish_github_repo,
     publish_github_branch,
+    publish_github_domain,
 ):
     """Convert a Claude Code or Codex session JSON/JSONL file or URL to HTML."""
     # Handle URL input
@@ -2491,6 +2515,7 @@ def json_cmd(
                 branch=publish_github_branch,
                 session_title=session_summary,
                 session_timestamp=session_timestamp,
+                pages_domain=publish_github_domain,
             )
             click.echo(f"Published: {pages_url}")
 
@@ -2774,6 +2799,11 @@ def generate_html_from_session_data(session_data, output_dir, github_repo=None):
     default="gh-pages",
     help="Target branch for GitHub Pages publishing (default: gh-pages).",
 )
+@click.option(
+    "--publish-to-github-domain",
+    "publish_github_domain",
+    help="GitHub Pages domain for the final published URL (for example foo.pages.github.io).",
+)
 def web_cmd(
     session_id,
     output,
@@ -2787,6 +2817,7 @@ def web_cmd(
     publish_github,
     publish_github_repo,
     publish_github_branch,
+    publish_github_domain,
 ):
     """Select and convert a web session from the Claude API to HTML.
 
@@ -2910,6 +2941,7 @@ def web_cmd(
                 branch=publish_github_branch,
                 session_title=session_title,
                 session_timestamp=session_timestamp,
+                pages_domain=publish_github_domain,
             )
             click.echo(f"Published: {pages_url}")
 
