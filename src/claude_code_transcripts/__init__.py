@@ -1,4 +1,4 @@
-"""Convert Claude Code session JSON to a clean mobile-friendly HTML page with pagination."""
+"""Convert Claude Code or Codex session JSON to clean mobile-friendly HTML pages."""
 
 import json
 import html
@@ -48,6 +48,11 @@ LONG_TEXT_THRESHOLD = (
     300  # Characters - text blocks longer than this are shown in index
 )
 
+CODEX_META_USER_PREFIXES = (
+    "# AGENTS.md instructions",
+    "<environment_context>",
+)
+
 
 def extract_text_from_content(content):
     """Extract plain text from message content.
@@ -67,12 +72,64 @@ def extract_text_from_content(content):
         # Extract text from content blocks of type "text"
         texts = []
         for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
+            if isinstance(block, dict) and block.get("type") in (
+                "text",
+                "input_text",
+                "output_text",
+            ):
                 text = block.get("text", "")
                 if text:
                     texts.append(text)
         return " ".join(texts).strip()
     return ""
+
+
+def _truncate_text(text, max_length):
+    """Truncate text to max_length with ellipsis."""
+    if len(text) > max_length:
+        return text[: max_length - 3] + "..."
+    return text
+
+
+def _detect_session_provider(filepath):
+    """Detect whether a session file is in Claude or Codex format."""
+    filepath = Path(filepath)
+
+    try:
+        if filepath.suffix == ".jsonl":
+            with open(filepath, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    obj = json.loads(line)
+                    if "payload" in obj and obj.get("type") in (
+                        "session_meta",
+                        "response_item",
+                        "event_msg",
+                        "turn_context",
+                    ):
+                        return "codex"
+                    return "claude"
+        elif filepath.suffix == ".json":
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and "items" in data and "session" in data:
+                return "codex"
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    return "claude"
+
+
+def _iter_session_files(folder, provider="claude"):
+    """Yield session files for the selected provider."""
+    folder = Path(folder)
+    if provider == "codex":
+        yield from folder.glob("**/*.jsonl")
+        yield from folder.glob("**/*.json")
+        return
+    yield from folder.glob("**/*.jsonl")
 
 
 # Module-level variable for GitHub repo (set by generate_html)
@@ -83,14 +140,19 @@ API_BASE_URL = "https://api.anthropic.com/v1"
 ANTHROPIC_VERSION = "2023-06-01"
 
 
-def get_session_summary(filepath, max_length=200):
+def get_session_summary(filepath, max_length=200, provider=None):
     """Extract a human-readable summary from a session file.
 
     Supports both JSON and JSONL formats.
     Returns a summary string or "(no summary)" if none found.
     """
     filepath = Path(filepath)
+    if provider is None:
+        provider = _detect_session_provider(filepath)
+
     try:
+        if provider == "codex":
+            return _get_codex_summary(filepath, max_length)
         if filepath.suffix == ".jsonl":
             return _get_jsonl_summary(filepath, max_length)
         else:
@@ -104,9 +166,7 @@ def get_session_summary(filepath, max_length=200):
                     content = msg.get("content", "")
                     text = extract_text_from_content(content)
                     if text:
-                        if len(text) > max_length:
-                            return text[: max_length - 3] + "..."
-                        return text
+                        return _truncate_text(text, max_length)
             return "(no summary)"
     except Exception:
         return "(no summary)"
@@ -124,10 +184,7 @@ def _get_jsonl_summary(filepath, max_length=200):
                     obj = json.loads(line)
                     # First priority: summary type entries
                     if obj.get("type") == "summary" and obj.get("summary"):
-                        summary = obj["summary"]
-                        if len(summary) > max_length:
-                            return summary[: max_length - 3] + "..."
-                        return summary
+                        return _truncate_text(obj["summary"], max_length)
                 except json.JSONDecodeError:
                     continue
 
@@ -147,9 +204,7 @@ def _get_jsonl_summary(filepath, max_length=200):
                         content = obj["message"]["content"]
                         text = extract_text_from_content(content)
                         if text and not text.startswith("<"):
-                            if len(text) > max_length:
-                                return text[: max_length - 3] + "..."
-                            return text
+                            return _truncate_text(text, max_length)
                 except json.JSONDecodeError:
                     continue
     except Exception:
@@ -158,7 +213,19 @@ def _get_jsonl_summary(filepath, max_length=200):
     return "(no summary)"
 
 
-def find_local_sessions(folder, limit=10):
+def _get_codex_summary(filepath, max_length=200):
+    """Extract summary from a Codex session file."""
+    data = parse_session_file(filepath, provider="codex")
+    for entry in data.get("loglines", []):
+        if entry.get("type") != "user":
+            continue
+        text = extract_text_from_content(entry.get("message", {}).get("content", ""))
+        if text:
+            return _truncate_text(text, max_length)
+    return "(no summary)"
+
+
+def find_local_sessions(folder, limit=10, provider="claude"):
     """Find recent JSONL session files in the given folder.
 
     Returns a list of (Path, summary) tuples sorted by modification time.
@@ -169,10 +236,10 @@ def find_local_sessions(folder, limit=10):
         return []
 
     results = []
-    for f in folder.glob("**/*.jsonl"):
-        if f.name.startswith("agent-"):
+    for f in _iter_session_files(folder, provider=provider):
+        if provider == "claude" and f.name.startswith("agent-"):
             continue
-        summary = get_session_summary(f)
+        summary = get_session_summary(f, provider=provider)
         # Skip boring/empty sessions
         if summary.lower() == "warmup" or summary == "(no summary)":
             continue
@@ -193,6 +260,10 @@ def get_project_display_name(folder_name):
     For nested paths under common roots (home, projects, code, Users, etc.),
     extracts the meaningful project portion.
     """
+    if "/" in folder_name or "\\" in folder_name:
+        path = Path(folder_name)
+        return path.name or folder_name
+
     # Common path prefixes to strip
     prefixes_to_strip = [
         "-home-",
@@ -242,7 +313,32 @@ def get_project_display_name(folder_name):
     return folder_name
 
 
-def find_all_sessions(folder, include_agents=False):
+def _get_codex_session_cwd(filepath):
+    """Extract cwd metadata from a Codex session file if available."""
+    filepath = Path(filepath)
+
+    try:
+        if filepath.suffix == ".jsonl":
+            with open(filepath, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    obj = json.loads(line)
+                    if obj.get("type") == "session_meta":
+                        return obj.get("payload", {}).get("cwd")
+        elif filepath.suffix == ".json":
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            session = data.get("session", {})
+            return session.get("cwd")
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    return None
+
+
+def find_all_sessions(folder, include_agents=False, provider="claude"):
     """Find all sessions in a Claude projects folder, grouped by project.
 
     Returns a list of project dicts, each containing:
@@ -259,19 +355,29 @@ def find_all_sessions(folder, include_agents=False):
 
     projects = {}
 
-    for session_file in folder.glob("**/*.jsonl"):
+    for session_file in _iter_session_files(folder, provider=provider):
         # Skip agent files unless requested
-        if not include_agents and session_file.name.startswith("agent-"):
+        if (
+            provider == "claude"
+            and not include_agents
+            and session_file.name.startswith("agent-")
+        ):
             continue
 
         # Get summary and skip boring sessions
-        summary = get_session_summary(session_file)
+        summary = get_session_summary(session_file, provider=provider)
         if summary.lower() == "warmup" or summary == "(no summary)":
             continue
 
         # Get project folder
-        project_folder = session_file.parent
-        project_key = project_folder.name
+        if provider == "codex":
+            project_key = _get_codex_session_cwd(session_file) or str(
+                session_file.parent
+            )
+            project_folder = Path(project_key)
+        else:
+            project_folder = session_file.parent
+            project_key = project_folder.name
 
         if project_key not in projects:
             projects[project_key] = {
@@ -304,7 +410,11 @@ def find_all_sessions(folder, include_agents=False):
 
 
 def generate_batch_html(
-    source_folder, output_dir, include_agents=False, progress_callback=None
+    source_folder,
+    output_dir,
+    include_agents=False,
+    progress_callback=None,
+    provider="claude",
 ):
     """Generate HTML archive for all sessions in a Claude projects folder.
 
@@ -327,7 +437,9 @@ def generate_batch_html(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Find all sessions
-    projects = find_all_sessions(source_folder, include_agents=include_agents)
+    projects = find_all_sessions(
+        source_folder, include_agents=include_agents, provider=provider
+    )
 
     # Calculate total for progress tracking
     total_session_count = sum(len(p["sessions"]) for p in projects)
@@ -448,14 +560,20 @@ def _generate_master_index(projects, output_dir):
     output_path.write_text(html_content, encoding="utf-8")
 
 
-def parse_session_file(filepath):
+def parse_session_file(filepath, provider=None):
     """Parse a session file and return normalized data.
 
     Supports both JSON and JSONL formats.
     Returns a dict with 'loglines' key containing the normalized entries.
     """
     filepath = Path(filepath)
+    if provider is None:
+        provider = _detect_session_provider(filepath)
 
+    if provider == "codex":
+        if filepath.suffix == ".jsonl":
+            return _parse_codex_jsonl_file(filepath)
+        return _parse_codex_json_file(filepath)
     if filepath.suffix == ".jsonl":
         return _parse_jsonl_file(filepath)
     else:
@@ -495,6 +613,250 @@ def _parse_jsonl_file(filepath):
                 loglines.append(entry)
             except json.JSONDecodeError:
                 continue
+
+    return {"loglines": loglines}
+
+
+def _is_codex_meta_message(text):
+    """Check if a Codex user message is harness-injected setup."""
+    return any(text.startswith(prefix) for prefix in CODEX_META_USER_PREFIXES)
+
+
+def _parse_codex_tool_arguments(arguments):
+    """Parse Codex tool arguments into a Python object."""
+    if isinstance(arguments, dict):
+        return arguments
+    if not isinstance(arguments, str):
+        return {}
+    try:
+        return json.loads(arguments)
+    except json.JSONDecodeError:
+        return {"raw": arguments}
+
+
+def _normalize_codex_content_blocks(content):
+    """Normalize Codex message blocks to Claude-style text blocks."""
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}]
+    if not isinstance(content, list):
+        return []
+
+    normalized = []
+    for block in content:
+        if not isinstance(block, dict):
+            normalized.append({"type": "text", "text": str(block)})
+            continue
+        block_type = block.get("type")
+        if block_type in ("input_text", "output_text", "text"):
+            text = block.get("text", "")
+            if text:
+                normalized.append({"type": "text", "text": text})
+        elif block_type == "image":
+            normalized.append(block)
+        else:
+            normalized.append({"type": "text", "text": json.dumps(block, indent=2)})
+    return normalized
+
+
+def _normalize_codex_message(payload):
+    """Convert a Codex message payload to the normalized message shape."""
+    role = payload.get("role", "assistant")
+    content = _normalize_codex_content_blocks(payload.get("content", []))
+    if role == "user" and all(
+        isinstance(block, dict) and block.get("type") == "text" for block in content
+    ):
+        content = extract_text_from_content(content)
+    return {
+        "role": role,
+        "content": content,
+    }
+
+
+def _normalize_codex_plan(tool_input):
+    """Convert update_plan payloads to TodoWrite-style blocks."""
+    todos = []
+    for item in tool_input.get("plan", []):
+        if not isinstance(item, dict):
+            continue
+        step = item.get("step", "")
+        if not step:
+            continue
+        status = item.get("status", "pending")
+        if status not in ("pending", "in_progress", "completed"):
+            status = "pending"
+        todos.append(
+            {
+                "content": step,
+                "status": status,
+                "activeForm": step,
+            }
+        )
+    return {"todos": todos}
+
+
+def _normalize_codex_tool_use(payload):
+    """Convert a Codex function call into a transcript tool_use block."""
+    tool_name = payload.get("name", "Unknown tool")
+    tool_input = _parse_codex_tool_arguments(payload.get("arguments"))
+
+    if tool_name in ("exec_command", "shell"):
+        command = tool_input.get("cmd")
+        if not command and isinstance(tool_input.get("command"), list):
+            command = " ".join(str(part) for part in tool_input["command"])
+        if not command:
+            command = tool_input.get("command", "")
+        tool_name = "Bash"
+        tool_input = {
+            "command": command,
+            "description": tool_input.get("justification", ""),
+        }
+    elif tool_name == "update_plan":
+        tool_name = "TodoWrite"
+        tool_input = _normalize_codex_plan(tool_input)
+
+    return {
+        "type": "tool_use",
+        "id": payload.get("call_id") or payload.get("id", ""),
+        "name": tool_name,
+        "input": tool_input,
+    }
+
+
+def _normalize_codex_tool_result(payload):
+    """Convert a Codex function call result into a transcript tool_result block."""
+    content = payload.get("output", "")
+    if isinstance(content, str):
+        try:
+            parsed = json.loads(content)
+            if isinstance(parsed, dict) and "output" in parsed:
+                content = parsed["output"]
+        except json.JSONDecodeError:
+            pass
+
+    return {
+        "type": "tool_result",
+        "tool_use_id": payload.get("call_id", ""),
+        "content": content,
+    }
+
+
+def _normalize_codex_reasoning(payload):
+    """Convert Codex reasoning summaries to transcript thinking blocks."""
+    summaries = payload.get("summary", [])
+    if not summaries:
+        return None
+
+    parts = []
+    for item in summaries:
+        if isinstance(item, str) and item:
+            parts.append(item)
+        elif isinstance(item, dict):
+            text = item.get("text") or item.get("summary")
+            if text:
+                parts.append(text)
+    if not parts:
+        return None
+
+    return {
+        "type": "thinking",
+        "thinking": "\n\n".join(parts),
+    }
+
+
+def _append_codex_logline(loglines, payload, timestamp):
+    """Append a normalized Codex payload to loglines if it is transcript-worthy."""
+    payload_type = payload.get("type")
+
+    if payload_type == "message":
+        role = payload.get("role")
+        if role not in ("user", "assistant"):
+            return
+        message = _normalize_codex_message(payload)
+        if role == "user":
+            text = extract_text_from_content(message.get("content", []))
+            if _is_codex_meta_message(text):
+                return
+        loglines.append(
+            {
+                "type": role,
+                "timestamp": timestamp,
+                "message": message,
+            }
+        )
+    elif payload_type == "function_call":
+        loglines.append(
+            {
+                "type": "assistant",
+                "timestamp": timestamp,
+                "message": {
+                    "role": "assistant",
+                    "content": [_normalize_codex_tool_use(payload)],
+                },
+            }
+        )
+    elif payload_type == "function_call_output":
+        loglines.append(
+            {
+                "type": "user",
+                "timestamp": timestamp,
+                "message": {
+                    "role": "user",
+                    "content": [_normalize_codex_tool_result(payload)],
+                },
+            }
+        )
+    elif payload_type == "reasoning":
+        block = _normalize_codex_reasoning(payload)
+        if block:
+            loglines.append(
+                {
+                    "type": "assistant",
+                    "timestamp": timestamp,
+                    "message": {
+                        "role": "assistant",
+                        "content": [block],
+                    },
+                }
+            )
+
+
+def _parse_codex_jsonl_file(filepath):
+    """Parse Codex JSONL sessions into normalized loglines."""
+    loglines = []
+
+    with open(filepath, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if obj.get("type") != "response_item":
+                continue
+
+            payload = obj.get("payload", {})
+            if isinstance(payload, dict):
+                _append_codex_logline(loglines, payload, obj.get("timestamp", ""))
+
+    return {"loglines": loglines}
+
+
+def _parse_codex_json_file(filepath):
+    """Parse older Codex JSON session files into normalized loglines."""
+    with open(filepath, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    loglines = []
+    default_timestamp = data.get("session", {}).get("timestamp", "")
+
+    for item in data.get("items", []):
+        if isinstance(item, dict):
+            _append_codex_logline(
+                loglines, item, item.get("timestamp", default_timestamp)
+            )
 
     return {"loglines": loglines}
 
@@ -1661,7 +2023,7 @@ def generate_html(json_path, output_dir, github_repo=None):
 @click.group(cls=DefaultGroup, default="local", default_if_no_args=True)
 @click.version_option(None, "-v", "--version", package_name="claude-code-transcripts")
 def cli():
-    """Convert Claude Code session JSON to mobile-friendly HTML pages."""
+    """Convert Claude Code or Codex session JSON to mobile-friendly HTML pages."""
     pass
 
 
@@ -1700,6 +2062,11 @@ def cli():
     help="Open the generated index.html in your default browser (default if no -o specified).",
 )
 @click.option(
+    "--codex",
+    is_flag=True,
+    help="Use local Codex sessions from ~/.codex/sessions instead of Claude sessions from ~/.claude/projects.",
+)
+@click.option(
     "--limit",
     default=10,
     help="Maximum number of sessions to show (default: 10)",
@@ -1728,21 +2095,31 @@ def local_cmd(
     gist,
     include_json,
     open_browser,
+    codex,
     limit,
     publish_github,
     publish_github_repo,
     publish_github_branch,
 ):
-    """Select and convert a local Claude Code session to HTML."""
-    projects_folder = Path.home() / ".claude" / "projects"
+    """Select and convert a local Claude Code or Codex session to HTML."""
+    provider = "codex" if codex else "claude"
+    provider_label = "Codex" if codex else "Claude Code"
+    projects_folder = (
+        Path.home() / ".codex" / "sessions"
+        if codex
+        else Path.home() / ".claude" / "projects"
+    )
 
     if not projects_folder.exists():
-        click.echo(f"Projects folder not found: {projects_folder}")
-        click.echo("No local Claude Code sessions available.")
+        click.echo(f"Sessions folder not found: {projects_folder}")
+        click.echo(f"No local {provider_label} sessions available.")
         return
 
-    click.echo("Loading local sessions...")
-    results = find_local_sessions(projects_folder, limit=limit)
+    if codex:
+        click.echo("Loading local Codex sessions...")
+    else:
+        click.echo("Loading local sessions...")
+    results = find_local_sessions(projects_folder, limit=limit, provider=provider)
 
     if not results:
         click.echo("No local sessions found.")
@@ -1780,7 +2157,7 @@ def local_cmd(
         parent_dir = Path(output) if output else Path(".")
         output = parent_dir / session_file.stem
     elif output is None:
-        output = Path(tempfile.gettempdir()) / f"claude-session-{session_file.stem}"
+        output = Path(tempfile.gettempdir()) / f"{provider}-session-{session_file.stem}"
 
     output = Path(output)
     generate_html(session_file, output, github_repo=repo)
@@ -1794,7 +2171,8 @@ def local_cmd(
         json_dest = output / session_file.name
         shutil.copy(session_file, json_dest)
         json_size_kb = json_dest.stat().st_size / 1024
-        click.echo(f"JSONL: {json_dest} ({json_size_kb:.1f} KB)")
+        label = session_file.suffix.upper().lstrip(".")
+        click.echo(f"{label}: {json_dest} ({json_size_kb:.1f} KB)")
 
     if gist:
         # Inject gist preview JS and create gist
@@ -1821,7 +2199,7 @@ def local_cmd(
 
         if publish_github_repo:
             # Get session title and timestamp for the slug
-            session_summary = get_session_summary(session_file)
+            session_summary = get_session_summary(session_file, provider=provider)
             session_mtime = datetime.fromtimestamp(session_file.stat().st_mtime)
             session_timestamp = session_mtime.isoformat()
 
@@ -1942,7 +2320,7 @@ def json_cmd(
     publish_github_repo,
     publish_github_branch,
 ):
-    """Convert a Claude Code session JSON/JSONL file or URL to HTML."""
+    """Convert a Claude Code or Codex session JSON/JSONL file or URL to HTML."""
     # Handle URL input
     if is_url(json_file):
         click.echo(f"Fetching {json_file}...")
@@ -2451,7 +2829,7 @@ def web_cmd(
     "-s",
     "--source",
     type=click.Path(exists=True),
-    help="Source directory containing Claude projects (default: ~/.claude/projects).",
+    help="Source directory containing sessions (default: ~/.claude/projects, or ~/.codex/sessions with --codex).",
 )
 @click.option(
     "-o",
@@ -2477,13 +2855,18 @@ def web_cmd(
     help="Open the generated archive in your default browser.",
 )
 @click.option(
+    "--codex",
+    is_flag=True,
+    help="Use Codex sessions from ~/.codex/sessions instead of Claude sessions from ~/.claude/projects.",
+)
+@click.option(
     "-q",
     "--quiet",
     is_flag=True,
     help="Suppress all output except errors.",
 )
-def all_cmd(source, output, include_agents, dry_run, open_browser, quiet):
-    """Convert all local Claude Code sessions to a browsable HTML archive.
+def all_cmd(source, output, include_agents, dry_run, open_browser, codex, quiet):
+    """Convert all local Claude Code or Codex sessions to a browsable HTML archive.
 
     Creates a directory structure with:
     - Master index listing all projects
@@ -2492,7 +2875,11 @@ def all_cmd(source, output, include_agents, dry_run, open_browser, quiet):
     """
     # Default source folder
     if source is None:
-        source = Path.home() / ".claude" / "projects"
+        source = (
+            Path.home() / ".codex" / "sessions"
+            if codex
+            else Path.home() / ".claude" / "projects"
+        )
     else:
         source = Path(source)
 
@@ -2504,7 +2891,10 @@ def all_cmd(source, output, include_agents, dry_run, open_browser, quiet):
     if not quiet:
         click.echo(f"Scanning {source}...")
 
-    projects = find_all_sessions(source, include_agents=include_agents)
+    provider = "codex" if codex else "claude"
+    projects = find_all_sessions(
+        source, include_agents=include_agents, provider=provider
+    )
 
     if not projects:
         if not quiet:
@@ -2548,6 +2938,7 @@ def all_cmd(source, output, include_agents, dry_run, open_browser, quiet):
         output,
         include_agents=include_agents,
         progress_callback=on_progress,
+        provider=provider,
     )
 
     # Report any failures

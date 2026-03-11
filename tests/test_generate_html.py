@@ -1142,6 +1142,42 @@ class TestParseSessionFile:
         assert "hello world" in index_html.lower()
         assert index_html == snapshot_html
 
+    def test_codex_jsonl_normalizes_messages_and_tools(self):
+        """Test that Codex JSONL files are normalized into transcript loglines."""
+        fixture_path = Path(__file__).parent / "sample_codex_session.jsonl"
+        result = parse_session_file(fixture_path)
+
+        assert [entry["type"] for entry in result["loglines"]] == [
+            "user",
+            "assistant",
+            "assistant",
+            "user",
+            "assistant",
+            "user",
+            "assistant",
+        ]
+        assert (
+            result["loglines"][0]["message"]["content"]
+            == "Add a Codex flag to the CLI and parse Codex session files."
+        )
+        assert result["loglines"][2]["message"]["content"][0]["type"] == "tool_use"
+        assert result["loglines"][2]["message"]["content"][0]["name"] == "Bash"
+        assert result["loglines"][4]["message"]["content"][0]["name"] == "TodoWrite"
+
+    def test_codex_jsonl_generates_html_without_harness_context(self, output_dir):
+        """Test that Codex JSONL files render the actual conversation, not setup."""
+        fixture_path = Path(__file__).parent / "sample_codex_session.jsonl"
+        generate_html(fixture_path, output_dir)
+
+        index_html = (output_dir / "index.html").read_text(encoding="utf-8")
+        page_html = (output_dir / "page-001.html").read_text(encoding="utf-8")
+
+        assert "Add a Codex flag" in index_html
+        assert "AGENTS.md instructions" not in index_html
+        assert "TodoWrite" not in page_html
+        assert "Add tests" in page_html
+        assert "Implement Codex support" in page_html
+
 
 class TestGetSessionSummary:
     """Tests for get_session_summary which extracts summary from session files."""
@@ -1176,6 +1212,12 @@ class TestGetSessionSummary:
         summary = get_session_summary(jsonl_file, max_length=100)
         assert len(summary) <= 100
         assert summary.endswith("...")
+
+    def test_gets_summary_from_codex_jsonl(self):
+        """Test extracting the real user prompt from a Codex JSONL file."""
+        fixture_path = Path(__file__).parent / "sample_codex_session.jsonl"
+        summary = get_session_summary(fixture_path)
+        assert summary == "Add a Codex flag to the CLI and parse Codex session files."
 
 
 class TestFindLocalSessions:
@@ -1278,6 +1320,27 @@ class TestFindLocalSessions:
 
         results = find_local_sessions(tmp_path / ".claude" / "projects", limit=3)
         assert len(results) == 3
+
+    def test_finds_codex_sessions(self, tmp_path):
+        """Test finding Codex session files in ~/.codex/sessions."""
+        sessions_dir = tmp_path / ".codex" / "sessions" / "2026" / "03" / "11"
+        sessions_dir.mkdir(parents=True)
+
+        session_file = sessions_dir / "rollout-test.jsonl"
+        fixture_path = Path(__file__).parent / "sample_codex_session.jsonl"
+        session_file.write_text(
+            fixture_path.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+
+        results = find_local_sessions(
+            tmp_path / ".codex" / "sessions", limit=10, provider="codex"
+        )
+        assert len(results) == 1
+        assert results[0][0] == session_file
+        assert (
+            results[0][1]
+            == "Add a Codex flag to the CLI and parse Codex session files."
+        )
 
 
 class TestLocalSessionCLI:
@@ -1388,6 +1451,39 @@ class TestLocalSessionCLI:
 
         assert result.exit_code == 0
         assert "No session selected" in result.output
+
+    def test_no_args_supports_codex_flag(self, tmp_path, monkeypatch):
+        """Test that --codex switches local discovery to ~/.codex/sessions."""
+        from click.testing import CliRunner
+        from claude_code_transcripts import cli
+        import questionary
+
+        sessions_dir = tmp_path / ".codex" / "sessions" / "2026" / "03" / "11"
+        sessions_dir.mkdir(parents=True)
+
+        session_file = sessions_dir / "rollout-test.jsonl"
+        fixture_path = Path(__file__).parent / "sample_codex_session.jsonl"
+        session_file.write_text(
+            fixture_path.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        class MockSelect:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def ask(self):
+                return session_file
+
+        monkeypatch.setattr(questionary, "select", MockSelect)
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["--codex"])
+
+        assert result.exit_code == 0
+        assert "Loading local Codex sessions" in result.output
+        assert "Generated" in result.output
 
 
 class TestOutputAutoOption:

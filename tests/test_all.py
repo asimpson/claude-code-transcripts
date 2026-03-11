@@ -414,6 +414,33 @@ class TestAllCommand:
         # Should not create any files
         assert not (output_dir / "index.html").exists()
 
+    def test_all_codex_creates_archive(self, tmp_path, output_dir):
+        """Test all --codex creates an archive from ~/.codex/sessions."""
+        runner = CliRunner()
+
+        sessions_dir = tmp_path / ".codex" / "sessions" / "2026" / "03" / "11"
+        sessions_dir.mkdir(parents=True)
+        fixture_path = Path(__file__).parent / "sample_codex_session.jsonl"
+        (sessions_dir / "rollout-test.jsonl").write_text(
+            fixture_path.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+
+        result = runner.invoke(
+            cli,
+            [
+                "all",
+                "--codex",
+                "--source",
+                str(tmp_path / ".codex" / "sessions"),
+                "--output",
+                str(output_dir),
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert (output_dir / "index.html").exists()
+        assert any((output_dir).glob("claude-code-transcripts/*/index.html"))
+
 
 class TestJsonCommandWithUrl:
     """Tests for the json command with URL support."""

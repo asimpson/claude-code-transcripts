@@ -5,7 +5,7 @@
 [![Tests](https://github.com/simonw/claude-code-transcripts/workflows/Test/badge.svg)](https://github.com/simonw/claude-code-transcripts/actions?query=workflow%3ATest)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/simonw/claude-code-transcripts/blob/main/LICENSE)
 
-Convert Claude Code session files (JSON or JSONL) to clean, mobile-friendly HTML pages with pagination.
+Convert Claude Code and Codex session files (JSON or JSONL) to clean, mobile-friendly HTML pages with pagination.
 
 [Example transcript](https://static.simonwillison.net/static/2025/claude-code-microjs/index.html) produced using this tool.
 
@@ -28,14 +28,14 @@ uvx claude-code-transcripts --help
 
 ## Usage
 
-This tool converts Claude Code session files into browseable multi-page HTML transcripts.
+This tool converts Claude Code and Codex session files into browseable multi-page HTML transcripts.
 
 There are four commands available:
 
-- `local` (default) - select from local Claude Code sessions stored in `~/.claude/projects`
+- `local` (default) - select from local Claude Code sessions in `~/.claude/projects`, or Codex sessions in `~/.codex/sessions` with `--codex`
 - `web` - select from web sessions via the Claude API
-- `json` - convert a specific JSON or JSONL session file
-- `all` - convert all local sessions to a browsable HTML archive
+- `json` - convert a specific Claude Code or Codex JSON/JSONL session file
+- `all` - convert all local Claude Code sessions, or all Codex sessions with `--codex`, to a browsable HTML archive
 
 The quickest way to view a recent local session:
 
@@ -74,6 +74,14 @@ Use `--limit` to control how many sessions are shown (default: 10):
 
 ```bash
 claude-code-transcripts local --limit 20
+```
+
+Use `--codex` to browse local Codex sessions from `~/.codex/sessions` instead:
+
+```bash
+claude-code-transcripts --codex
+# or explicitly:
+claude-code-transcripts local --codex
 ```
 
 ### Web sessions
@@ -169,7 +177,7 @@ Convert a specific session file directly:
 claude-code-transcripts json session.json -o output-directory/
 claude-code-transcripts json session.jsonl --open
 ```
-This works with both JSONL files in the `~/.claude/projects/` folder and JSON session files extracted from Claude Code for web.
+This works with Claude JSONL files in `~/.claude/projects/`, Codex JSON/JSONL files in `~/.codex/sessions/`, and JSON session files extracted from Claude Code for web.
 
 The `json` command can take a URL to a JSON or JSONL file as an alternative to a path on disk.
 
@@ -188,11 +196,12 @@ This creates a directory structure with:
 
 Options:
 
-- `-s, --source DIRECTORY` - source directory (default: `~/.claude/projects`)
+- `-s, --source DIRECTORY` - source directory (default: `~/.claude/projects`, or `~/.codex/sessions` with `--codex`)
 - `-o, --output DIRECTORY` - output directory (default: `./claude-archive`)
 - `--include-agents` - include agent session files (excluded by default)
 - `--dry-run` - show what would be converted without creating files
 - `--open` - open the generated archive in your default browser
+- `--codex` - scan local Codex sessions instead of Claude Code sessions
 - `-q, --quiet` - suppress all output except errors
 
 Examples:
@@ -209,6 +218,9 @@ claude-code-transcripts all -o ./my-archive
 
 # Include agent sessions
 claude-code-transcripts all --include-agents
+
+# Convert Codex sessions instead of Claude sessions
+claude-code-transcripts all --codex
 ```
 
 ## Development
