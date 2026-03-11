@@ -55,6 +55,8 @@ CODEX_META_USER_PREFIXES = (
     "# AGENTS.md instructions",
     "<environment_context>",
 )
+CODEX_IMAGE_PLACEHOLDER_PATTERN = re.compile(r"^<image name=\[(.+?)\]>$")
+DATA_URL_PATTERN = re.compile(r"^data:([^;]+);base64,(.+)$", re.DOTALL)
 
 
 def extract_text_from_content(content):
@@ -714,7 +716,26 @@ def _normalize_codex_content_blocks(content):
         if block_type in ("input_text", "output_text", "text"):
             text = block.get("text", "")
             if text:
+                match = CODEX_IMAGE_PLACEHOLDER_PATTERN.match(text)
+                if match:
+                    text = f"Image: {match.group(1)}"
                 normalized.append({"type": "text", "text": text})
+        elif block_type == "input_image":
+            image_url = block.get("image_url", "")
+            match = DATA_URL_PATTERN.match(image_url)
+            if match:
+                normalized.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": match.group(1),
+                            "data": match.group(2),
+                        },
+                    }
+                )
+            else:
+                normalized.append({"type": "text", "text": "Attached image"})
         elif block_type == "image":
             normalized.append(block)
         else:

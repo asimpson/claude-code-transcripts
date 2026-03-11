@@ -1206,6 +1206,33 @@ class TestParseSessionFile:
         assert 'class="index-commit-hash">abc1234<' not in index_html
         assert "1 commits" in index_html or "1 commit" in index_html
 
+    def test_codex_input_image_renders_image_instead_of_base64(
+        self, tmp_path, output_dir
+    ):
+        """Test that Codex input_image blocks render an image instead of JSON/base64 text."""
+        fixture_path = tmp_path / "codex-image.jsonl"
+        fixture_path.write_text(
+            '{"timestamp":"2026-03-11T13:19:38.933Z","type":"session_meta","payload":{"id":"test","timestamp":"2026-03-11T13:18:57.551Z","cwd":"/project","originator":"codex_cli_rs"}}\n'
+            '{"timestamp":"2026-03-11T13:19:38.936Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<image name=[Image #1]>"},{"type":"input_image","image_url":"data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="}]}}\n'
+            '{"timestamp":"2026-03-11T13:19:41.476Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I can see the image."}]}}\n',
+            encoding="utf-8",
+        )
+
+        result = parse_session_file(fixture_path)
+        user_message = result["loglines"][0]["message"]["content"]
+        assert user_message[0]["type"] == "text"
+        assert user_message[1]["type"] == "image"
+
+        generate_html(fixture_path, output_dir)
+
+        index_html = (output_dir / "index.html").read_text(encoding="utf-8")
+        page_html = (output_dir / "page-001.html").read_text(encoding="utf-8")
+
+        assert "Image #1" in index_html
+        assert '"type": "input_image"' not in index_html
+        assert '<img src="data:image/gif;base64,' in page_html
+        assert '"type": "input_image"' not in page_html
+
 
 class TestGetSessionSummary:
     """Tests for get_session_summary which extracts summary from session files."""
