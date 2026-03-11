@@ -1803,6 +1803,8 @@ def build_github_pages_url(owner, repo_name, base_path, pages_domain=None):
     """Build the public URL for published GitHub Pages content."""
     if pages_domain:
         domain = re.sub(r"^https?://", "", pages_domain.strip()).rstrip("/")
+        if "." not in domain:
+            domain = f"{domain}.pages.github.io"
         return f"https://{domain}/{base_path}/"
     return f"https://{owner}.github.io/{repo_name}/{base_path}/"
 
@@ -2196,7 +2198,7 @@ def cli():
 @click.option(
     "--publish-to-github-domain",
     "publish_github_domain",
-    help="GitHub Pages domain for the final published URL (for example foo.pages.github.io).",
+    help="GitHub Pages domain prefix or hostname for the final published URL (for example foo or foo.pages.github.io).",
 )
 def local_cmd(
     output,
@@ -2423,7 +2425,7 @@ def fetch_url_to_tempfile(url):
 @click.option(
     "--publish-to-github-domain",
     "publish_github_domain",
-    help="GitHub Pages domain for the final published URL (for example foo.pages.github.io).",
+    help="GitHub Pages domain prefix or hostname for the final published URL (for example foo or foo.pages.github.io).",
 )
 def json_cmd(
     json_file,
@@ -2802,7 +2804,7 @@ def generate_html_from_session_data(session_data, output_dir, github_repo=None):
 @click.option(
     "--publish-to-github-domain",
     "publish_github_domain",
-    help="GitHub Pages domain for the final published URL (for example foo.pages.github.io).",
+    help="GitHub Pages domain prefix or hostname for the final published URL (for example foo or foo.pages.github.io).",
 )
 def web_cmd(
     session_id,

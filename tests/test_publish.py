@@ -176,7 +176,7 @@ class TestPublishToGithub:
         assert "2025-01-15" in url
 
     def test_returns_custom_pages_domain_url(self, tmp_path, monkeypatch):
-        """Test custom GitHub Pages domain is used in the returned URL."""
+        """Test Pages domain prefix is expanded in the returned URL."""
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         (output_dir / "index.html").write_text("<html><body>Index</body></html>")
@@ -202,7 +202,7 @@ class TestPublishToGithub:
             branch="gh-pages",
             session_title="Fix auth bug",
             session_timestamp="2025-01-15T10:30:00.000Z",
-            pages_domain="foo.pages.github.io",
+            pages_domain="foo",
         )
 
         assert url == "https://foo.pages.github.io/testuser/2025-01-15-fix-auth-bug/"
@@ -574,12 +574,12 @@ class TestPublishToGithubCLI:
                 "--publish-to-github-repo",
                 "myorg/transcripts",
                 "--publish-to-github-domain",
-                "foo.pages.github.io",
+                "foo",
             ],
         )
 
         assert result.exit_code == 0
-        assert publish_calls[0]["pages_domain"] == "foo.pages.github.io"
+        assert publish_calls[0]["pages_domain"] == "foo"
         assert (
             "Published: https://foo.pages.github.io/testuser/2025-01-15-fix-auth-bug/"
             in result.output

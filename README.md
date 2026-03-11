@@ -153,16 +153,17 @@ claude-code-transcripts json session.json \
   --publish-to-github-repo myorg/transcripts
 ```
 
-If your Pages site is served from a custom domain or alternate Pages hostname, pass
+If your Pages site uses a GitHub Pages domain prefix or alternate Pages hostname, pass
 `--publish-to-github-domain` to have the final output use that URL instead of the default
-`https://OWNER.github.io/REPO/...` form:
+`https://OWNER.github.io/REPO/...` form. A bare value like `foo` expands to
+`https://foo.pages.github.io/...`:
 
 ```bash
 claude-code-transcripts json session.json \
   -o ./my-transcript \
   --publish-to-github \
   --publish-to-github-repo myorg/transcripts \
-  --publish-to-github-domain foo.pages.github.io
+  --publish-to-github-domain foo
 ```
 
 ### Auto-naming output directories
