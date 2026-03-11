@@ -37,6 +37,9 @@ def get_template(name):
 
 # Regex to match git commit output: [branch hash] message
 COMMIT_PATTERN = re.compile(r"\[[\w\-/]+ ([a-f0-9]{7,})\] (.+?)(?:\n|$)")
+GIT_COMMIT_COMMAND_PATTERN = re.compile(
+    r"\bgit\s+(?:commit|merge|cherry-pick|revert)\b"
+)
 
 # Regex to detect GitHub repo from git push output (e.g., github.com/owner/repo/pull/new/branch)
 GITHUB_REPO_PATTERN = re.compile(
@@ -130,6 +133,21 @@ def _iter_session_files(folder, provider="claude"):
         yield from folder.glob("**/*.json")
         return
     yield from folder.glob("**/*.jsonl")
+
+
+def get_provider_display_name(provider):
+    """Get the user-facing name for a session provider."""
+    return "Codex" if provider == "codex" else "Claude Code"
+
+
+def get_transcript_title(provider):
+    """Get the transcript title for a provider."""
+    return f"{get_provider_display_name(provider)} transcript"
+
+
+def get_archive_title(provider):
+    """Get the archive title for a provider."""
+    return f"{get_provider_display_name(provider)} Archive"
 
 
 # Module-level variable for GitHub repo (set by generate_html)
@@ -479,10 +497,10 @@ def generate_batch_html(
                 )
 
         # Generate project index
-        _generate_project_index(project, project_dir)
+        _generate_project_index(project, project_dir, provider=provider)
 
     # Generate master index
-    _generate_master_index(projects, output_dir)
+    _generate_master_index(projects, output_dir, provider=provider)
 
     return {
         "total_projects": len(projects),
@@ -492,7 +510,7 @@ def generate_batch_html(
     }
 
 
-def _generate_project_index(project, output_dir):
+def _generate_project_index(project, output_dir, provider="claude"):
     """Generate index.html for a single project."""
     template = get_template("project_index.html")
 
@@ -510,6 +528,7 @@ def _generate_project_index(project, output_dir):
         )
 
     html_content = template.render(
+        archive_title=get_archive_title(provider),
         project_name=project["name"],
         sessions=sessions_data,
         session_count=len(sessions_data),
@@ -521,7 +540,7 @@ def _generate_project_index(project, output_dir):
     output_path.write_text(html_content, encoding="utf-8")
 
 
-def _generate_master_index(projects, output_dir):
+def _generate_master_index(projects, output_dir, provider="claude"):
     """Generate master index.html listing all projects."""
     template = get_template("master_index.html")
 
@@ -549,6 +568,7 @@ def _generate_master_index(projects, output_dir):
         )
 
     html_content = template.render(
+        archive_title=get_archive_title(provider),
         projects=projects_data,
         total_projects=len(projects),
         total_sessions=total_sessions,
@@ -558,6 +578,48 @@ def _generate_master_index(projects, output_dir):
 
     output_path = output_dir / "index.html"
     output_path.write_text(html_content, encoding="utf-8")
+
+
+def _tool_use_runs_git_commit(block):
+    """Check if a tool_use block executed a git command that creates a commit."""
+    if not isinstance(block, dict) or block.get("type") != "tool_use":
+        return False
+    if block.get("name") != "Bash":
+        return False
+
+    tool_input = block.get("input", {})
+    if not isinstance(tool_input, dict):
+        return False
+
+    command = tool_input.get("command", "")
+    return bool(command and GIT_COMMIT_COMMAND_PATTERN.search(command))
+
+
+def _annotate_commit_metadata(loglines):
+    """Mark tool results that came from git commit commands."""
+    tool_use_commit_flags = {}
+
+    for entry in loglines:
+        message = entry.get("message", {})
+        content = message.get("content", [])
+        if not isinstance(content, list):
+            continue
+
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+
+            if block.get("type") == "tool_use":
+                tool_id = block.get("id")
+                if tool_id:
+                    tool_use_commit_flags[tool_id] = _tool_use_runs_git_commit(block)
+            elif block.get("type") == "tool_result":
+                tool_use_id = block.get("tool_use_id")
+                block["is_git_commit_output"] = bool(
+                    tool_use_id and tool_use_commit_flags.get(tool_use_id)
+                )
+
+    return loglines
 
 
 def parse_session_file(filepath, provider=None):
@@ -579,7 +641,9 @@ def parse_session_file(filepath, provider=None):
     else:
         # Standard JSON format
         with open(filepath, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        data["loglines"] = _annotate_commit_metadata(data.get("loglines", []))
+        return data
 
 
 def _parse_jsonl_file(filepath):
@@ -614,7 +678,7 @@ def _parse_jsonl_file(filepath):
             except json.JSONDecodeError:
                 continue
 
-    return {"loglines": loglines}
+    return {"loglines": _annotate_commit_metadata(loglines)}
 
 
 def _is_codex_meta_message(text):
@@ -841,7 +905,7 @@ def _parse_codex_jsonl_file(filepath):
             if isinstance(payload, dict):
                 _append_codex_logline(loglines, payload, obj.get("timestamp", ""))
 
-    return {"loglines": loglines}
+    return {"loglines": _annotate_commit_metadata(loglines)}
 
 
 def _parse_codex_json_file(filepath):
@@ -858,7 +922,7 @@ def _parse_codex_json_file(filepath):
                 loglines, item, item.get("timestamp", default_timestamp)
             )
 
-    return {"loglines": loglines}
+    return {"loglines": _annotate_commit_metadata(loglines)}
 
 
 class CredentialsError(Exception):
@@ -1140,9 +1204,10 @@ def render_content_block(block):
         content = block.get("content", "")
         is_error = block.get("is_error", False)
         has_images = False
+        is_git_commit_output = block.get("is_git_commit_output", False)
 
         # Check for git commits and render with styled cards
-        if isinstance(content, str):
+        if isinstance(content, str) and is_git_commit_output:
             commits_found = list(COMMIT_PATTERN.finditer(content))
             if commits_found:
                 # Build commit cards + remaining content
@@ -1169,6 +1234,8 @@ def render_content_block(block):
                 content_html = "".join(parts)
             else:
                 content_html = f"<pre>{html.escape(content)}</pre>"
+        elif isinstance(content, str):
+            content_html = f"<pre>{html.escape(content)}</pre>"
         elif isinstance(content, list):
             # Handle tool result content that contains multiple blocks (text, images, etc.)
             parts = []
@@ -1253,7 +1320,9 @@ def analyze_conversation(messages):
             elif block_type == "tool_result":
                 # Check for git commit output
                 result_content = block.get("content", "")
-                if isinstance(result_content, str):
+                if isinstance(result_content, str) and block.get(
+                    "is_git_commit_output", False
+                ):
                     for match in COMMIT_PATTERN.finditer(result_content):
                         commits.append((match.group(1), match.group(2), timestamp))
             elif block_type == "text":
@@ -1848,9 +1917,11 @@ def generate_index_pagination_html(total_pages):
 def generate_html(json_path, output_dir, github_repo=None):
     output_dir = Path(output_dir)
     output_dir.mkdir(exist_ok=True)
+    provider = _detect_session_provider(json_path)
+    transcript_title = get_transcript_title(provider)
 
     # Load session file (supports both JSON and JSONL)
-    data = parse_session_file(json_path)
+    data = parse_session_file(json_path, provider=provider)
 
     loglines = data.get("loglines", [])
 
@@ -1924,6 +1995,7 @@ def generate_html(json_path, output_dir, github_repo=None):
         page_content = page_template.render(
             css=CSS,
             js=JS,
+            transcript_title=transcript_title,
             page_num=page_num,
             total_pages=total_pages,
             pagination_html=pagination_html,
@@ -2005,6 +2077,7 @@ def generate_html(json_path, output_dir, github_repo=None):
     index_content = index_template.render(
         css=CSS,
         js=JS,
+        transcript_title=transcript_title,
         pagination_html=index_pagination,
         prompt_num=prompt_num,
         total_messages=total_messages,

@@ -439,6 +439,9 @@ class TestAllCommand:
 
         assert result.exit_code == 0
         assert (output_dir / "index.html").exists()
+        assert "Codex Archive" in (output_dir / "index.html").read_text(
+            encoding="utf-8"
+        )
         assert any((output_dir).glob("claude-code-transcripts/*/index.html"))
 
 

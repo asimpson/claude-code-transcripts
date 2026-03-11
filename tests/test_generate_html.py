@@ -296,6 +296,7 @@ class TestRenderContentBlock:
                 "type": "tool_result",
                 "content": "[main abc1234] Add new feature\n 2 files changed, 10 insertions(+)",
                 "is_error": False,
+                "is_git_commit_output": True,
             }
             result = render_content_block(block)
             assert result == snapshot_html
@@ -417,6 +418,7 @@ class TestAnalyzeConversation:
                             {
                                 "type": "tool_result",
                                 "content": "[main abc1234] Add new feature\n 1 file changed",
+                                "is_git_commit_output": True,
                             }
                         ]
                     }
@@ -1172,11 +1174,37 @@ class TestParseSessionFile:
         index_html = (output_dir / "index.html").read_text(encoding="utf-8")
         page_html = (output_dir / "page-001.html").read_text(encoding="utf-8")
 
+        assert "<title>Codex transcript - Index</title>" in index_html
+        assert "<h1>Codex transcript</h1>" in index_html
+        assert "<title>Codex transcript - page 1</title>" in page_html
         assert "Add a Codex flag" in index_html
         assert "AGENTS.md instructions" not in index_html
         assert "TodoWrite" not in page_html
         assert "Add tests" in page_html
         assert "Implement Codex support" in page_html
+
+    def test_codex_commit_detection_ignores_shell_output_false_positives(
+        self, tmp_path, output_dir
+    ):
+        """Test that fixture text in shell output does not create a fake commit card."""
+        fixture_path = tmp_path / "codex-commit-filter.jsonl"
+        fixture_path.write_text(
+            '{"timestamp":"2026-03-11T13:19:38.933Z","type":"session_meta","payload":{"id":"test","timestamp":"2026-03-11T13:18:57.551Z","cwd":"/project","originator":"codex_cli_rs"}}\n'
+            '{"timestamp":"2026-03-11T13:19:38.936Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Check commit detection."}]}}\n'
+            '{"timestamp":"2026-03-11T13:19:44.676Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\\"cmd\\":\\"rg -n \\\\\\"abc1234\\\\\\" tests/sample_session.jsonl\\"}","call_id":"call_rg"}}\n'
+            '{"timestamp":"2026-03-11T13:19:44.719Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_rg","output":"tests/sample_session.jsonl:6:{\\"type\\":\\"user\\",\\"message\\":{\\"role\\":\\"user\\",\\"content\\":[{\\"type\\":\\"tool_result\\",\\"tool_use_id\\":\\"toolu_002\\",\\"content\\":\\"[main abc1234] Add hello function\\\\n 1 file changed\\"}]},\\"uuid\\":\\"msg-005\\"}"}}\n'
+            '{"timestamp":"2026-03-11T13:19:46.376Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\\"cmd\\":\\"git add . && git commit -m \\\\\\"Real commit\\\\\\"\\"}","call_id":"call_git"}}\n'
+            '{"timestamp":"2026-03-11T13:19:46.377Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_git","output":"[main 62860f5] Real commit\\n 1 file changed"}}\n',
+            encoding="utf-8",
+        )
+
+        generate_html(fixture_path, output_dir)
+
+        index_html = (output_dir / "index.html").read_text(encoding="utf-8")
+
+        assert 'class="index-commit-hash">62860f5<' in index_html
+        assert 'class="index-commit-hash">abc1234<' not in index_html
+        assert "1 commits" in index_html or "1 commit" in index_html
 
 
 class TestGetSessionSummary:
